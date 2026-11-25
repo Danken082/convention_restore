@@ -1,0 +1,68 @@
+<?php
+
+namespace App\Mail;
+
+use App\Models\Registration;
+use App\Services\GoogleDriveProofStorage;
+use Illuminate\Bus\Queueable;
+use Illuminate\Mail\Attachment;
+use Illuminate\Mail\Mailable;
+use Illuminate\Mail\Mailables\Content;
+use Illuminate\Mail\Mailables\Envelope;
+
+class RegistrationReceived extends Mailable
+{
+    use Queueable;
+
+    public function __construct(
+        public Registration $registration,
+        public bool $includeProof = false,
+        public array $registrations = [],
+    ) {}
+
+    public function envelope(): Envelope
+    {
+        return new Envelope(
+            subject: $this->includeProof
+                ? 'New convention registration'
+                : 'Your convention registration',
+        );
+    }
+
+    public function content(): Content
+    {
+        $spreadsheetId = config('services.google_sheets.spreadsheet_id');
+        $spreadsheetUrl = is_string($spreadsheetId) && $spreadsheetId !== ''
+            ? 'https://docs.google.com/spreadsheets/d/'.rawurlencode($spreadsheetId).'/edit'
+            : null;
+
+        return new Content(
+            view: 'emails.registration-received',
+            with: [
+                'spreadsheetUrl' => $spreadsheetUrl,
+                'attendees' => $this->registrations ?: [$this->registration],
+                'submittedAt' => $this->registration->created_at?->copy()
+                    ->timezone(config('registrations.display_timezone'))
+                    ->format('F j, Y g:i A'),
+            ],
+        );
+    }
+
+    public function attachments(): array
+    {
+        $path = $this->registration->proof_of_payment_path;
+        $driveStorage = app(GoogleDriveProofStorage::class);
+        if ($driveStorage->isDrivePath($path)) {
+            return [
+                Attachment::fromData(
+                    fn (): string => $driveStorage->download($path),
+                    $driveStorage->fileName($path),
+                ),
+            ];
+        }
+
+        return [
+            Attachment::fromStorageDisk('local', $path)->as(basename($path)),
+        ];
+    }
+}
